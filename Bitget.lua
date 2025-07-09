@@ -131,14 +131,18 @@ function convertToEUR(amount, currency)
     elseif currency == "USDT" then
         -- Treat USDT as USD for conversion
         local rate = getFxRate("EUR", "USD")
-        local eurAmount = amount / rate
-        MM.printStatus("Umrechnung: " .. amount .. " " .. currency .. " = " .. eurAmount .. " EUR")
-        return eurAmount
+        if not rate then
+            MM.printStatus("Fallback: USDT wird als 1:1 USD behandelt")
+            rate = 1
+        end
+        return amount / rate
     else
         local rate = getFxRate("EUR", currency)
-        local eurAmount = amount / rate
-        MM.printStatus("Umrechnung: " .. amount .. " " .. currency .. " = " .. eurAmount .. " EUR")
-        return eurAmount
+        if not rate then
+            MM.printStatus("Problem: Kein Wechselkurs für " .. currency .. ", verwende 1:1 Fallback")
+            return amount
+        end
+        return amount / rate
     end
 end
 
@@ -155,10 +159,8 @@ function setFxRate(base, quote, rate)
         local pair = base:upper() .. "/" .. quote:upper()
         if cachedFxRates[pair] == nil then
             if rate then
-                MM.printStatus("Wechselkurs Cache: " .. pair .. " = " .. rate)
                 cachedFxRates[pair] = rate
             else
-                MM.printStatus("Wechselkurs Cache: " .. pair .. " = nicht verfügbar")
                 cachedFxRates[pair] = "not_available"
             end
         end
@@ -167,37 +169,14 @@ end
 
 -- Helper functions
 function fetchCurrentPrice(symbol)
-    MM.printStatus("Lade aktuellen Preis für " .. symbol)
     local response = makeRequest("GET", "/api/mix/v1/market/ticker", {symbol = symbol}, nil)
-    
-    if response and response.code == "00000" and response.data then
-        local price = tonumber(response.data.last) or tonumber(response.data.close) or 0
-        MM.printStatus(string.format("Aktueller Preis für %s: %.6f", symbol, price))
-        return price
-    end
-    
-    MM.printStatus("Fehler beim Abrufen des aktuellen Preises für " .. symbol)
-    return 0
-end
 
-function base64(data)
-    -- Try to use MoneyMoney's base64 if available
-    if MM.base64 then
-        return MM.base64(data)
+    if response and response.code == "00000" and response.data then
+        return tonumber(response.data.last) or tonumber(response.data.close) or 0
     end
-    
-    -- Fallback to custom implementation
-    local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-    return ((data:gsub('.', function(x)
-        local r,b='',x:byte()
-        for i=8,1,-1 do r=r..(b%2^i-b%2^(i-1)>0 and '1' or '0') end
-        return r;
-    end)..'0000'):gsub('%d%d%d?%d?%d?%d?', function(x)
-        if (#x < 6) then return '' end
-        local c=0
-        for i=1,6 do c=c+(x:sub(i,i)=='1' and 2^(6-i) or 0) end
-        return b:sub(c+1,c+1)
-    end)..({ '', '==', '=' })[#data%3+1])
+
+    MM.printStatus("Fallback: Kein aktueller Preis für " .. symbol)
+    return 0
 end
 
 function createSignature(timestamp, method, requestPath, queryString, body)
@@ -210,7 +189,7 @@ function createSignature(timestamp, method, requestPath, queryString, body)
     end
 
     local signature = MM.hmac256(apiSecret, message)
-    return base64(signature)
+    return MM.base64(signature)
 end
 
 function makeRequest(method, path, queryParams, body)
@@ -420,15 +399,24 @@ function fetchFuturesPositions()
                     local unrealizedPnl = tonumber(position.unrealizedPL) or 0
                     local markPrice = tonumber(position.markPrice) or 0
                     local avgPrice = tonumber(position.averageOpenPrice) or 0
-                    
+                    -- Check for margin mode (isolated vs cross)
+                    local marginMode = "Cross" -- Default fallback
+                    if position.marginMode then
+                        marginMode = position.marginMode == "isolated" and "Isolated" or "Cross"
+                    elseif position.marginType then
+                        marginMode = position.marginType == "isolated" and "Isolated" or "Cross"
+                    elseif position.isolatedMargin then
+                        marginMode = position.isolatedMargin == "1" and "Isolated" or "Cross"
+                    end
+
                     -- If markPrice is 0 or nil, fetch current price from ticker API
                     if markPrice == 0 then
                         markPrice = tonumber(position.lastPrice) or tonumber(position.indexPrice) or 0
-                        
+
                         -- If still no price, fetch from ticker API
                         if markPrice == 0 then
                             markPrice = fetchCurrentPrice(position.symbol)
-                            
+
                             -- Final fallback to avgPrice if ticker also fails
                             if markPrice == 0 then
                                 markPrice = avgPrice
@@ -460,10 +448,10 @@ function fetchFuturesPositions()
 
                     -- Format symbol with slash (e.g., AVAXUSDT -> AVAX/USDT)
                     local formattedSymbol = symbol:gsub("USDT$", "/USDT"):gsub("USDC$", "/USDC"):gsub("BTC$", "/BTC"):gsub("ETH$", "/ETH")
-                    
+
                     -- Name without side (use quantity sign instead)
                     local name = string.format("%s %dx", formattedSymbol, leverage)
-                    
+
                     -- Use negative quantity for short positions
                     local adjustedQuantity = total
                     if side == "Short" then
@@ -476,15 +464,11 @@ function fetchFuturesPositions()
                     local amountEUR = convertToEUR(originalAmount, marginCurrency)
                     local unrealizedPnlEUR = convertToEUR(unrealizedPnl, marginCurrency)
 
-                    -- Debug: Log the prices and raw values
-                    MM.printStatus(string.format("DEBUG: %s - Kaufkurs: %.2f, Aktueller Kurs: %.2f, PnL: %.2f", formattedSymbol, avgPrice, markPrice, unrealizedPnl))
-                    MM.printStatus(string.format("DEBUG RAW: markPrice='%s', avgPrice='%s'", tostring(position.markPrice), tostring(position.averageOpenPrice)))
-                    MM.printStatus(string.format("DEBUG FIELDS: currency='%s', price=%.6f, purchasePrice=%.6f, originalAmount=%.2f", quoteCurrency, markPrice, avgPrice, markPrice * total))
-                    
+
                     -- Simplified approach - let MoneyMoney handle the display
                     local positionValueUSD = markPrice * total
                     local positionValueEUR = convertToEUR(positionValueUSD, quoteCurrency)
-                    
+
                     table.insert(securities, {
                         name = name,
                         market = "Bitget Futures",
@@ -497,8 +481,8 @@ function fetchFuturesPositions()
                         currencyOfPurchasePrice = quoteCurrency,
                         exchangeRate = getFxRateToBase(quoteCurrency),
                         amount = positionValueEUR,
-                        -- Use ISIN for position identifier
-                        isin = string.format("%s %s %dx", formattedSymbol, side, leverage)
+                        -- Use ISIN for position identifier (without slash)
+                        isin = string.format("%s %s-%dx-%s", symbol, side, leverage, marginMode)
                     })
                 end
             end
