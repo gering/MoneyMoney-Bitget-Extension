@@ -278,8 +278,11 @@ function fetchFuturesPositions()
                     -- Calculate position value
                     local positionValue = total * markPrice
 
+                    -- Format symbol with slash (e.g., AVAXUSDT -> AVAX/USDT)
+                    local formattedSymbol = symbol:gsub("USDT$", "/USDT"):gsub("USDC$", "/USDC"):gsub("BTC$", "/BTC"):gsub("ETH$", "/ETH")
+                    
                     -- Name includes symbol, side and leverage
-                    local name = string.format("%s %s %dx", symbol, side, leverage)
+                    local name = string.format("%s %s %dx", formattedSymbol, side, leverage)
 
                     -- For display, we show the margin + unrealized PnL as the amount
                     local amount = margin + unrealizedPnl
