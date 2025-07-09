@@ -41,12 +41,152 @@ local apiSecret
 local passphrase
 local baseUrl = "https://api.bitget.com"
 
+-- Exchange rate cache
+local cachedFxRates = {} -- currency pair (e.g. EUR/USD) : rate
+
 -- Constants
 local SPOT_ACCOUNT_NAME = "Bitget Spot"
 local FUTURES_ACCOUNT_NAME = "Bitget Futures"
 
+-- String extensions for XML parsing
+string.parseTagContent = function(s, tag)
+    return s:match("<" .. tag .. ".->(.-)</" .. tag .. ">")
+end
+
+string.parseTag = function(s, tag)
+    return s:match("<" .. tag .. ".-/>")
+end
+
+string.parseTags = function(s, tag)
+    return s:gmatch("<" .. tag .. ".-/>")
+end
+
+string.parseArgs = function(s)
+    local args = {}
+    s:gsub("([%-%w]+)=([\"'])(.-)%2", function(w, _, a)
+        args[w] = a
+    end)
+    return args
+end
+
+-- Currency conversion functions
+function fetchFxRate(base, quote)
+    if quote == "EUR" then
+        return 1 / fetchFxRate(quote, base)
+    end
+
+    if base == "EUR" then
+        local content = Connection():request("GET", "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml")
+        for cube in content:parseTags("Cube") do
+            local conversion = cube:parseArgs()
+            if conversion.currency == quote then
+                MM.printStatus("Wechselkurs geladen: " .. base .. "/" .. quote .. " @ " .. conversion.rate)
+                return tonumber(conversion.rate)
+            end
+        end
+    end
+
+    MM.printStatus("Wechselkurs nicht verfügbar für " .. base .. "/" .. quote)
+    -- Cache failed lookups to avoid repeated API calls
+    setFxRate(base, quote, nil)
+    return nil
+end
+
+function getFxRate(base, quote)
+    if base:lower() == quote:lower() then
+        return 1
+    end
+
+    -- Use cached rate
+    local pair = base:upper() .. "/" .. quote:upper()
+    if cachedFxRates[pair] ~= nil then
+        if cachedFxRates[pair] == "not_available" then
+            return 1 -- fallback to 1:1 if cached as not available
+        end
+        return cachedFxRates[pair]
+    end
+
+    -- Use cached rate of reversed pair
+    local reversedPair = quote:upper() .. "/" .. base:upper()
+    if cachedFxRates[reversedPair] ~= nil then
+        if cachedFxRates[reversedPair] == "not_available" then
+            return 1 -- fallback to 1:1 if cached as not available
+        end
+        return 1/cachedFxRates[reversedPair]
+    end
+
+    -- Fetch rate as fallback
+    local rate = fetchFxRate(base, quote)
+    if rate then
+        setFxRate(base, quote, rate)
+        return rate
+    end
+
+    return 1 -- fallback to 1:1 if no rate found
+end
+
+function convertToEUR(amount, currency)
+    if currency == "EUR" then
+        return amount
+    elseif currency == "USDT" then
+        -- Treat USDT as USD for conversion
+        local rate = getFxRate("EUR", "USD")
+        local eurAmount = amount / rate
+        MM.printStatus("Umrechnung: " .. amount .. " " .. currency .. " = " .. eurAmount .. " EUR")
+        return eurAmount
+    else
+        local rate = getFxRate("EUR", currency)
+        local eurAmount = amount / rate
+        MM.printStatus("Umrechnung: " .. amount .. " " .. currency .. " = " .. eurAmount .. " EUR")
+        return eurAmount
+    end
+end
+
+function getFxRateToBase(currency)
+    -- Special handling for USDT - treat as USD
+    if currency == "USDT" then
+        return getFxRate("EUR", "USD")
+    end
+    return getFxRate("EUR", currency)
+end
+
+function setFxRate(base, quote, rate)
+    if base ~= quote then
+        local pair = base:upper() .. "/" .. quote:upper()
+        if cachedFxRates[pair] == nil then
+            if rate then
+                MM.printStatus("Wechselkurs Cache: " .. pair .. " = " .. rate)
+                cachedFxRates[pair] = rate
+            else
+                MM.printStatus("Wechselkurs Cache: " .. pair .. " = nicht verfügbar")
+                cachedFxRates[pair] = "not_available"
+            end
+        end
+    end
+end
+
 -- Helper functions
+function fetchCurrentPrice(symbol)
+    MM.printStatus("Lade aktuellen Preis für " .. symbol)
+    local response = makeRequest("GET", "/api/mix/v1/market/ticker", {symbol = symbol}, nil)
+    
+    if response and response.code == "00000" and response.data then
+        local price = tonumber(response.data.last) or tonumber(response.data.close) or 0
+        MM.printStatus(string.format("Aktueller Preis für %s: %.6f", symbol, price))
+        return price
+    end
+    
+    MM.printStatus("Fehler beim Abrufen des aktuellen Preises für " .. symbol)
+    return 0
+end
+
 function base64(data)
+    -- Try to use MoneyMoney's base64 if available
+    if MM.base64 then
+        return MM.base64(data)
+    end
+    
+    -- Fallback to custom implementation
     local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
     return ((data:gsub('.', function(x)
         local r,b='',x:byte()
@@ -224,27 +364,35 @@ function fetchSpotBalances()
         local total = available + frozen + locked
 
         if total > 0 then
-            -- Get current price
-            local price = 0
+            -- Get current price in USD
+            local priceUSD = 0
 
             -- Skip price lookup for USDT itself
             if coin == "USDT" then
-                price = 1
+                priceUSD = 1
             else
                 local priceResponse = makeRequest("GET", "/api/spot/v1/market/ticker", {symbol = coin .. "USDT_SPBL"}, nil)
 
                 if priceResponse and priceResponse.code == "00000" and priceResponse.data then
-                    price = tonumber(priceResponse.data.close) or 0
+                    priceUSD = tonumber(priceResponse.data.close) or 0
                 end
             end
+
+            -- Convert amount to EUR
+            local amountUSD = total * priceUSD
+            local amountEUR = convertToEUR(amountUSD, "USD")
 
             table.insert(securities, {
                 name = coin .. " (Spot)",
                 currency = "USD",
                 market = "Bitget",
                 quantity = total,
-                price = price,
-                amount = total * price
+                price = priceUSD,
+                currencyOfPrice = "USD",
+                originalCurrencyAmount = amountUSD,
+                currencyOfOriginalAmount = "USD",
+                exchangeRate = getFxRateToBase("USD"),
+                amount = amountEUR
             })
         end
         ::continue::
@@ -272,30 +420,85 @@ function fetchFuturesPositions()
                     local unrealizedPnl = tonumber(position.unrealizedPL) or 0
                     local markPrice = tonumber(position.markPrice) or 0
                     local avgPrice = tonumber(position.averageOpenPrice) or 0
+                    
+                    -- If markPrice is 0 or nil, fetch current price from ticker API
+                    if markPrice == 0 then
+                        markPrice = tonumber(position.lastPrice) or tonumber(position.indexPrice) or 0
+                        
+                        -- If still no price, fetch from ticker API
+                        if markPrice == 0 then
+                            markPrice = fetchCurrentPrice(position.symbol)
+                            
+                            -- Final fallback to avgPrice if ticker also fails
+                            if markPrice == 0 then
+                                markPrice = avgPrice
+                            end
+                        end
+                    end
                     local total = tonumber(position.total) or 0
                     local margin = tonumber(position.margin) or 0
 
                     -- Calculate position value
                     local positionValue = total * markPrice
 
+                    -- Extract quote currency from symbol and map to 3-digit codes
+                    local quoteCurrency = "USD" -- Default (USDT -> USD for MoneyMoney)
+                    local quoteCurrencyDisplay = "USDT" -- For display purposes
+                    if symbol:match("USDT$") then
+                        quoteCurrency = "USD"
+                        quoteCurrencyDisplay = "USDT"
+                    elseif symbol:match("USDC$") then
+                        quoteCurrency = "USD"
+                        quoteCurrencyDisplay = "USDC"
+                    elseif symbol:match("BTC$") then
+                        quoteCurrency = "BTC"
+                        quoteCurrencyDisplay = "BTC"
+                    elseif symbol:match("ETH$") then
+                        quoteCurrency = "ETH"
+                        quoteCurrencyDisplay = "ETH"
+                    end
+
                     -- Format symbol with slash (e.g., AVAXUSDT -> AVAX/USDT)
                     local formattedSymbol = symbol:gsub("USDT$", "/USDT"):gsub("USDC$", "/USDC"):gsub("BTC$", "/BTC"):gsub("ETH$", "/ETH")
                     
-                    -- Name includes symbol, side and leverage
-                    local name = string.format("%s %s %dx", formattedSymbol, side, leverage)
+                    -- Name without side (use quantity sign instead)
+                    local name = string.format("%s %dx", formattedSymbol, leverage)
+                    
+                    -- Use negative quantity for short positions
+                    local adjustedQuantity = total
+                    if side == "Short" then
+                        adjustedQuantity = -total
+                    end
 
-                    -- For display, we show the margin + unrealized PnL as the amount
-                    local amount = margin + unrealizedPnl
+                    -- Convert amounts to EUR
+                    local marginCurrency = position.marginCoin
+                    local originalAmount = margin + unrealizedPnl
+                    local amountEUR = convertToEUR(originalAmount, marginCurrency)
+                    local unrealizedPnlEUR = convertToEUR(unrealizedPnl, marginCurrency)
 
+                    -- Debug: Log the prices and raw values
+                    MM.printStatus(string.format("DEBUG: %s - Kaufkurs: %.2f, Aktueller Kurs: %.2f, PnL: %.2f", formattedSymbol, avgPrice, markPrice, unrealizedPnl))
+                    MM.printStatus(string.format("DEBUG RAW: markPrice='%s', avgPrice='%s'", tostring(position.markPrice), tostring(position.averageOpenPrice)))
+                    MM.printStatus(string.format("DEBUG FIELDS: currency='%s', price=%.6f, purchasePrice=%.6f, originalAmount=%.2f", quoteCurrency, markPrice, avgPrice, markPrice * total))
+                    
+                    -- Simplified approach - let MoneyMoney handle the display
+                    local positionValueUSD = markPrice * total
+                    local positionValueEUR = convertToEUR(positionValueUSD, quoteCurrency)
+                    
                     table.insert(securities, {
                         name = name,
-                        currency = position.marginCoin,
                         market = "Bitget Futures",
-                        quantity = total,
+                        quantity = adjustedQuantity,
+                        originalCurrencyAmount = positionValueUSD,
+                        currencyOfOriginalAmount = quoteCurrency,
                         price = markPrice,
-                        amount = amount,
-                        -- Additional info in ISIN field for visibility
-                        isin = string.format("PnL: %.2f %s", unrealizedPnl, position.marginCoin)
+                        currencyOfPrice = quoteCurrency,
+                        purchasePrice = avgPrice,
+                        currencyOfPurchasePrice = quoteCurrency,
+                        exchangeRate = getFxRateToBase(quoteCurrency),
+                        amount = positionValueEUR,
+                        -- Use ISIN for position identifier
+                        isin = string.format("%s %s %dx", formattedSymbol, side, leverage)
                     })
                 end
             end
