@@ -1,24 +1,21 @@
--- Inofficial Bitget Extension (www.bitget.com) for MoneyMoney
+-- Unofficial Bitget Extension (www.bitget.com) for MoneyMoney
 -- Fetches Spot balances and Futures positions via Bitget API
 -- Returns them as securities
 --
--- Username: API Key
--- Password: API Secret:Passphrase (format: "your-api-secret:your-passphrase")
---
 -- MIT License
-
+--
 -- Copyright (c) 2025 Robert Gering
-
+--
 -- Permission is hereby granted, free of charge, to any person obtaining a copy
 -- of this software and associated documentation files (the "Software"), to deal
 -- in the Software without restriction, including without limitation the rights
 -- to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 -- copies of the Software, and to permit persons to whom the Software is
 -- furnished to do so, subject to the following conditions:
-
+--
 -- The above copyright notice and this permission notice shall be included in all
 -- copies or substantial portions of the Software.
-
+--
 -- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 -- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 -- FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -350,9 +347,8 @@ function fetchSpotBalances()
             local amountEUR = convertToEUR(amountUSD, "USD")
 
             table.insert(securities, {
-                name = coin .. " (Spot)",
-                currency = "USD",
-                market = "Bitget",
+                name = coin,
+                market = "Bitget Spot",
                 quantity = total,
                 price = priceUSD,
                 currencyOfPrice = "USD",
@@ -372,6 +368,28 @@ end
 function fetchFuturesPositions()
     local securities = {}
 
+    -- First, fetch futures account balance (available funds)
+    local balanceResponse = makeRequest("GET", "/api/mix/v1/account/accounts", {productType = "umcbl"}, nil)
+    if balanceResponse and balanceResponse.code == "00000" and balanceResponse.data then
+        for _, account in ipairs(balanceResponse.data or {}) do
+            -- Try different fields for available balance
+            local available = tonumber(account.available) or tonumber(account.equity) or tonumber(account.crossMaxAvailable) or 0
+            local marginCoin = account.marginCoin or "USDT"
+
+            if available > 0 then
+                local availableEUR = convertToEUR(available, marginCoin == "USDT" and "USD" or marginCoin)
+
+                table.insert(securities, {
+                    name = marginCoin,
+                    market = "Bitget Futures",
+                    quantity = available,
+                    exchangeRate = getFxRateToBase(marginCoin == "USDT" and "USD" or marginCoin),
+                    amount = availableEUR
+                })
+            end
+        end
+    end
+
     -- Fetch all futures positions
     local productTypes = {"umcbl", "dmcbl", "cmcbl"} -- USDT, Universal, USDC perpetuals
 
@@ -382,40 +400,20 @@ function fetchFuturesPositions()
             for _, position in ipairs(response.data or {}) do
                 if tonumber(position.total) and tonumber(position.total) > 0 then
                     local symbol = position.symbol:gsub("_.*", "") -- Remove suffix like _UMCBL
-                    local side = position.holdSide == "long" and "Long" or "Short"
+                    local cryptoSymbol = symbol:match("([%w]+)USDT") or symbol:match("([%w]+)USDC") or symbol:match("([%w]+)BTC") or symbol:match("([%w]+)ETH")
+                    local holdSide = position.holdSide
                     local leverage = tonumber(position.leverage) or 1
+
                     local unrealizedPnl = tonumber(position.unrealizedPL) or 0
-                    local markPrice = tonumber(position.markPrice) or 0
+                    local marketPrice = tonumber(position.marketPrice) or 0
                     local avgPrice = tonumber(position.averageOpenPrice) or 0
+
                     -- Check for margin mode (isolated vs cross)
-                    local marginMode = "Cross" -- Default fallback
-                    if position.marginMode then
-                        marginMode = position.marginMode == "isolated" and "Isolated" or "Cross"
-                    elseif position.marginType then
-                        marginMode = position.marginType == "isolated" and "Isolated" or "Cross"
-                    elseif position.isolatedMargin then
-                        marginMode = position.isolatedMargin == "1" and "Isolated" or "Cross"
-                    end
-
-                    -- If markPrice is 0 or nil, fetch current price from ticker API
-                    if markPrice == 0 then
-                        markPrice = tonumber(position.lastPrice) or tonumber(position.indexPrice) or 0
-
-                        -- If still no price, fetch from ticker API
-                        if markPrice == 0 then
-                            markPrice = fetchCurrentPrice(position.symbol)
-
-                            -- Final fallback to avgPrice if ticker also fails
-                            if markPrice == 0 then
-                                markPrice = avgPrice
-                            end
-                        end
-                    end
+                    local marginMode = position.marginMode or "unknown"
                     local total = tonumber(position.total) or 0
                     local margin = tonumber(position.margin) or 0
 
-                    -- Calculate position value
-                    local positionValue = total * markPrice
+                    MM.printStatus("Futures-Position: " .. symbol .. " (" .. holdSide .. ")" .. " - Leverage: " .. leverage .. "x " .. marginMode .. " - Margin: " .. margin .. " - Price: " .. marketPrice .. " - Average Price: " .. avgPrice .. " - P&L: " .. unrealizedPnl .. " - Total: " .. total)
 
                     -- Extract quote currency from symbol and map to 3-digit codes
                     local quoteCurrency = "USD" -- Default (USDT -> USD for MoneyMoney)
@@ -434,53 +432,61 @@ function fetchFuturesPositions()
                         quoteCurrencyDisplay = "ETH"
                     end
 
+                    -- Handle Long and Short positions correctly
+                    local adjustedQuantity = total
+                    local adjustedPrice = marketPrice
+                    local adjustedPurchasePrice = avgPrice
+
+                    if holdSide == "short" then
+                        adjustedQuantity = -total -- Short positions are negative in MoneyMoney
+                    end
+
+                    -- For correct portfolio value: use margin + unrealized P&L
+                    local marginUSD = tonumber(position.margin) or 0
+                    local marginCurrency = position.marginCoin or quoteCurrency
+                    -- Convert USDT to USD for MoneyMoney compatibility
+                    if marginCurrency == "USDT" then
+                        marginCurrency = "USD"
+                    end
+
+                    local marginEUR = convertToEUR(marginUSD, marginCurrency)
+                    local unrealizedPnlEUR = convertToEUR(unrealizedPnl, quoteCurrency)
+                    local amountEUR = convertToEUR(unrealizedPnl, quoteCurrency)
+                    local relativePnl = marginUSD ~= 0 and (unrealizedPnl / marginUSD * 100) or 0
+                    local currencyOfQuantity = cryptoSymbol and cryptoSymbol:sub(1,3) or nil
+
                     -- Format symbol with slash (e.g., AVAXUSDT -> AVAX/USDT)
                     local formattedSymbol = symbol:gsub("USDT$", "/USDT"):gsub("USDC$", "/USDC"):gsub("BTC$", "/BTC"):gsub("ETH$", "/ETH")
 
-                    -- Name includes side for clarity since we use positive quantities
-                    local name = string.format("%s %s %dx", formattedSymbol, side, leverage)
+                    -- Format profit string exactly as MoneyMoney expects
+                    local profit = string.format("%.02f EUR / ", unrealizedPnlEUR) .. string.format("%.05f", relativePnl) .. " %"
 
-                    -- For short positions, we need to handle P&L calculation differently
-                    -- MoneyMoney doesn't handle negative quantities correctly for shorts
-                    local adjustedQuantity = total
-                    local adjustedPrice = markPrice
-                    local adjustedPurchasePrice = avgPrice
-                    
-                    if side == "Short" then
-                        -- Keep quantity positive but invert price logic
-                        -- For shorts: profit when price falls, loss when price rises
-                        -- We achieve this by swapping current and purchase prices
-                        adjustedPrice = avgPrice
-                        adjustedPurchasePrice = markPrice
-                        -- And use absolute quantity (no negative)
-                        adjustedQuantity = math.abs(total)
-                    end
-
-                    -- Convert amounts to EUR
-                    local marginCurrency = position.marginCoin
-                    local originalAmount = margin + unrealizedPnl
-                    local amountEUR = convertToEUR(originalAmount, marginCurrency)
-                    local unrealizedPnlEUR = convertToEUR(unrealizedPnl, marginCurrency)
-
-
-                    -- Calculate position value based on adjusted quantity and price
-                    local positionValueUSD = adjustedPrice * adjustedQuantity
-                    local positionValueEUR = convertToEUR(positionValueUSD, quoteCurrency)
+                    -- Create a unique identifier for the position
+                    local positionIdentifier = string.format("%s %s-%dx-%s", symbol, holdSide, leverage, marginMode)
 
                     table.insert(securities, {
-                        name = name,
+                        name = formattedSymbol,
                         market = "Bitget Futures",
                         quantity = adjustedQuantity,
-                        originalCurrencyAmount = positionValueUSD,
-                        currencyOfOriginalAmount = quoteCurrency,
+                        -- currencyOfQuantity = currencyOfQuantity,
+                        -- originalCurrencyAmount = marginUSD,
+                        -- currencyOfOriginalAmount = marginCurrency,
                         price = adjustedPrice,
-                        currencyOfPrice = quoteCurrency,
+                        --currencyOfPrice = quoteCurrency,
                         purchasePrice = adjustedPurchasePrice,
-                        currencyOfPurchasePrice = quoteCurrency,
+                        --currencyOfPurchasePrice = quoteCurrency,
                         exchangeRate = getFxRateToBase(quoteCurrency),
-                        amount = positionValueEUR,
-                        -- Use ISIN for position identifier (without slash)
-                        isin = string.format("%s %s-%dx-%s", symbol, side, leverage, marginMode)
+                        amount = marginEUR + amountEUR,
+                        isin = positionIdentifier, -- Use position identifier as ISIN
+                        -- Custom fields for additional information
+                        userdata = {
+                            { key="_profit", value=profit },
+                            { key="Hebel", value=leverage .. "x" },
+                            { key="Margin", value=string.format("%.02f", marginEUR) .. " € (" .. marginMode .. ")" },
+                            -- { key="Margin Coin", value=marginCoin },
+                            -- { key="Symbol", value=symbol },
+                            -- { key="Coin", value=cryptoSymbol },
+                        }
                     })
                 end
             end
