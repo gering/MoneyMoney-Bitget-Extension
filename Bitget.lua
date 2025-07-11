@@ -236,20 +236,8 @@ function InitializeSession(protocol, bankCode, username, username2, password, us
     MM.printStatus("Initialisiere Bitget-Verbindung")
 
     apiKey = username
-
-    -- Parse API Secret and Passphrase from password field (format: "secret:passphrase")
-    local passwordParts = {}
-    for part in password:gmatch("([^:]+)") do
-        table.insert(passwordParts, part)
-    end
-
-    if #passwordParts ~= 2 then
-        MM.printStatus("Fehler: Passwort muss Format 'API-Secret:Passphrase' haben")
-        return LoginFailed
-    end
-
-    apiSecret = passwordParts[1]
-    passphrase = passwordParts[2]
+    apiSecret = username2
+    passphrase = password
 
     if not apiKey or apiKey == "" then
         MM.printStatus("Fehler: API Key fehlt")

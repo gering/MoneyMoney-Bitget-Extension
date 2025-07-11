@@ -37,14 +37,12 @@ You'll need to create API credentials on Bitget:
    - **Passphrase** (you set this during creation)
 
 In MoneyMoney, use these credentials:
-- **Username**: Your API Key
-- **Password**: Your Secret Key and Passphrase combined with colon (format: `secret:passphrase`)
 
-## Security
+- **API-Key**: Your API Key
+- **API-Schlüssel**: Your Secret Key
+- **API-Passphrase**: Your Secret Passphrase
 
-- API credentials are stored locally in your macOS keychain
-- The extension only uses read permissions
-- Never share your API credentials with anyone
+![MoneyMoney Credentials Screenshot](Screenshot.png)
 
 ## Support
 

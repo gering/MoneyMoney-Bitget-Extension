@@ -37,14 +37,12 @@ Sie müssen API-Zugangsdaten bei Bitget erstellen:
    - **Passphrase** (Passwort, das Sie bei der Erstellung festlegen)
 
 In MoneyMoney verwenden Sie diese Zugangsdaten:
-- **Benutzername**: Ihr API Key
-- **Passwort**: Ihr Secret Key und Passphrase mit Doppelpunkt verbunden (Format: `secret:passphrase`)
 
-## Sicherheit
+- **API-Key**: Ihr API Key
+- **API-Schlüssel**: Ihr Secret Key
+- **API-Passphrase**: Ihr Secret Passphrase
 
-- API-Zugangsdaten werden lokal im macOS-Schlüsselbund gespeichert
-- Die Erweiterung verwendet nur Leseberechtigungen
-- Teilen Sie Ihre API-Zugangsdaten niemals mit anderen
+![MoneyMoney Zugangsdaten Screenshot](Screenshot.png)
 
 ## Support
 
