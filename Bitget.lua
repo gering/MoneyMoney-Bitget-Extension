@@ -437,13 +437,23 @@ function fetchFuturesPositions()
                     -- Format symbol with slash (e.g., AVAXUSDT -> AVAX/USDT)
                     local formattedSymbol = symbol:gsub("USDT$", "/USDT"):gsub("USDC$", "/USDC"):gsub("BTC$", "/BTC"):gsub("ETH$", "/ETH")
 
-                    -- Name without side (use quantity sign instead)
-                    local name = string.format("%s %dx", formattedSymbol, leverage)
+                    -- Name includes side for clarity since we use positive quantities
+                    local name = string.format("%s %s %dx", formattedSymbol, side, leverage)
 
-                    -- Use negative quantity for short positions
+                    -- For short positions, we need to handle P&L calculation differently
+                    -- MoneyMoney doesn't handle negative quantities correctly for shorts
                     local adjustedQuantity = total
+                    local adjustedPrice = markPrice
+                    local adjustedPurchasePrice = avgPrice
+                    
                     if side == "Short" then
-                        adjustedQuantity = -total
+                        -- Keep quantity positive but invert price logic
+                        -- For shorts: profit when price falls, loss when price rises
+                        -- We achieve this by swapping current and purchase prices
+                        adjustedPrice = avgPrice
+                        adjustedPurchasePrice = markPrice
+                        -- And use absolute quantity (no negative)
+                        adjustedQuantity = math.abs(total)
                     end
 
                     -- Convert amounts to EUR
@@ -453,8 +463,8 @@ function fetchFuturesPositions()
                     local unrealizedPnlEUR = convertToEUR(unrealizedPnl, marginCurrency)
 
 
-                    -- Simplified approach - let MoneyMoney handle the display
-                    local positionValueUSD = markPrice * total
+                    -- Calculate position value based on adjusted quantity and price
+                    local positionValueUSD = adjustedPrice * adjustedQuantity
                     local positionValueEUR = convertToEUR(positionValueUSD, quoteCurrency)
 
                     table.insert(securities, {
@@ -463,9 +473,9 @@ function fetchFuturesPositions()
                         quantity = adjustedQuantity,
                         originalCurrencyAmount = positionValueUSD,
                         currencyOfOriginalAmount = quoteCurrency,
-                        price = markPrice,
+                        price = adjustedPrice,
                         currencyOfPrice = quoteCurrency,
-                        purchasePrice = avgPrice,
+                        purchasePrice = adjustedPurchasePrice,
                         currencyOfPurchasePrice = quoteCurrency,
                         exchangeRate = getFxRateToBase(quoteCurrency),
                         amount = positionValueEUR,
