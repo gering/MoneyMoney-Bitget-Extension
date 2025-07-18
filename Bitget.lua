@@ -165,6 +165,71 @@ function setFxRate(base, quote, rate)
 end
 
 -- Helper functions
+local allCoins = nil -- Cache for CoinGecko coin data
+
+-- Hardcoded coins table for major cryptocurrencies to avoid symbol collisions
+local coins = {
+    btc = { id = "bitcoin", name = "Bitcoin" },
+    eth = { id = "ethereum", name = "Ethereum" },
+    ltc = { id = "litecoin", name = "Litecoin" },
+    doge = { id = "dogecoin", name = "Dogecoin" },
+    dot = { id = "polkadot", name = "Polkadot" },
+    ada = { id = "cardano", name = "Cardano" },
+    sol = { id = "solana", name = "Solana" },
+    avax = { id = "avalanche-2", name = "Avalanche" },
+    matic = { id = "matic-network", name = "Polygon" },
+    link = { id = "chainlink", name = "Chainlink" },
+    uni = { id = "uniswap", name = "Uniswap" },
+    atom = { id = "cosmos", name = "Cosmos" },
+    xrp = { id = "ripple", name = "XRP" },
+    bnb = { id = "binancecoin", name = "BNB" },
+    usdc = { id = "usd-coin", name = "USD Coin" },
+    usdt = { id = "tether", name = "Tether" }
+}
+
+function fetchAllCoins()
+    MM.printStatus("Lade Crypto Coins von CoinGecko...")
+    local connection = Connection()
+    local content = connection:request("GET", "https://api.coingecko.com/api/v3/coins/list")
+    if content then
+        local coinList = JSON(content):dictionary()
+        local coinMap = {}
+        for _, coin in ipairs(coinList) do
+            -- Only add if not already present (first occurrence wins)
+            if not coinMap[coin.symbol] then
+                coinMap[coin.symbol] = coin
+            end
+        end
+        return coinMap
+    end
+    return nil
+end
+
+function lookupCoinName(symbol)
+    local lowerSymbol = symbol:lower()
+
+    -- First, try hardcoded local coins
+    local coin = coins[lowerSymbol]
+
+    if coin == nil then
+        -- If not found, try to fetch all coins from CoinGecko
+        if allCoins == nil then
+            allCoins = fetchAllCoins()
+            if allCoins == nil then
+                MM.printStatus("Crypto Coins konnten nicht geladen werden")
+                return symbol
+            end
+        end
+        coin = allCoins[lowerSymbol]
+    end
+
+    if coin == nil then
+        return symbol -- fallback to symbol if not found
+    end
+
+    return coin.name
+end
+
 function fetchCurrentPrice(symbol)
     local response = makeRequest("GET", "/api/mix/v1/market/ticker", {symbol = symbol}, nil)
 
@@ -457,6 +522,8 @@ function fetchFuturesPositions()
 
                     -- Format symbol with slash (e.g., AVAXUSDT -> AVAX/USDT)
                     local formattedSymbol = symbol:gsub("USDT$", "/USDT"):gsub("USDC$", "/USDC"):gsub("BTC$", "/BTC"):gsub("ETH$", "/ETH")
+                    -- Coin name (e.g., AVAX -> Avalanche)
+                    local coinName = cryptoSymbol and lookupCoinName(cryptoSymbol) or cryptoSymbol
 
                     -- Format profit string exactly as MoneyMoney expects
                     local profit = string.format("%.02f EUR / ", unrealizedPnlEUR) .. string.format("%.05f", relativePnl) .. " %"
@@ -485,7 +552,7 @@ function fetchFuturesPositions()
                             { key="Margin", value=string.format("%.02f", marginEUR) .. " € (" .. marginMode .. ")" },
                             -- { key="Margin Coin", value=marginCoin },
                             -- { key="Symbol", value=symbol },
-                            -- { key="Coin", value=cryptoSymbol },
+                            { key="Coin", value=coinName },
                         }
                     })
                 end
