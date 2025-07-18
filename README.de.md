@@ -9,11 +9,15 @@ Dies ist eine inoffizielle Erweiterung für [MoneyMoney](https://moneymoney-app.
 - Abruf aller Spot-Guthaben mit aktuellen Marktpreisen
 - Abruf aller Futures-Positionen inklusive:
   - Positionsgröße und Hebel
-  - Nicht realisierter Gewinn/Verlust (P&L)
+  - Nicht realisierter Gewinn/Verlust (P&L) in EUR mit Prozentangabe
   - Aktueller Mark-Preis
   - Unterstützung für USDT, Universal Margin und USDC Perpetuals
-- Anzeige der Positionen als Wertpapiere mit aussagekräftigen Namen (z.B. "BTCUSDT Long 10x")
+- Anzeige der Positionen als Wertpapiere mit aussagekräftigen Namen
+- **Kryptowährungsnamen**: Zeigt vollständige Coin-Namen (z.B. "Polkadot" für DOT) über CoinGecko API
 - Getrennte Konten für Spot und Futures
+- Erweiterte Anzeige mit zusätzlichen Positionsdetails in MoneyMoney
+
+![Plugin Positionen](ScreenshotList.png)
 
 ## Installation
 

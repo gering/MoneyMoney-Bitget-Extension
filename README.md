@@ -9,11 +9,15 @@ This is an unofficial extension for [MoneyMoney](https://moneymoney-app.com/) th
 - Fetches all spot balances with current market prices
 - Fetches all futures positions including:
   - Position size and leverage
-  - Unrealized P&L
+  - Unrealized P&L in EUR with percentage
   - Current mark price
   - Support for USDT, Universal Margin, and USDC perpetuals
-- Shows positions as securities with proper naming (e.g., "BTCUSDT Long 10x")
+- Shows positions as securities with proper naming
+- **Cryptocurrency names**: Displays full coin names (e.g., "Polkadot" for DOT) via CoinGecko API
 - Separate accounts for Spot and Futures
+- Enhanced display with additional position details in MoneyMoney
+
+![Plugin Positions](ScreenshotList.png)
 
 ## Setup
 
