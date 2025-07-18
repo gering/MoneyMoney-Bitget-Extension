@@ -568,3 +568,4 @@ function EndSession()
     -- Nothing to do
 end
 
+-- SIGNATURE: MCwCFCYdNW7DLiYj4iCFABo/nw8vGvdnAhR6JehjZeEG6w9aOvFyDaatbgVIVg==
