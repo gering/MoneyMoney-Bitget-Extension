@@ -545,14 +545,14 @@ function fetchFuturesPositions()
                         exchangeRate = getFxRateToBase(quoteCurrency),
                         amount = marginEUR + amountEUR,
                         isin = positionIdentifier, -- Use position identifier as ISIN
-                        -- Custom fields for additional information
                         userdata = {
                             { key="_profit", value=profit },
+                            -- Custom fields for additional information
+                            { key="Coin", value=coinName },
                             { key="Hebel", value=leverage .. "x" },
-                            { key="Margin", value=string.format("%.02f", marginEUR) .. " € (" .. marginMode .. ")" },
+                            { key="Margin", value=string.format("%.02f €", marginEUR) },
                             -- { key="Margin Coin", value=marginCoin },
                             -- { key="Symbol", value=symbol },
-                            { key="Coin", value=coinName },
                         }
                     })
                 end
