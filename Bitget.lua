@@ -380,7 +380,7 @@ function fetchSpotBalances()
     end
 
     for _, asset in ipairs(response.data or {}) do
-        local coin = asset.coinName or asset.coin
+        local coin = asset.coinName or asset.coinDisplayName
         if not coin then
             -- Skip asset if no coin name available
             MM.printStatus("Überspringe Asset ohne Coin-Name")
@@ -411,6 +411,9 @@ function fetchSpotBalances()
             local amountUSD = total * priceUSD
             local amountEUR = convertToEUR(amountUSD, "USD")
 
+            -- Coin name (e.g., AVAX -> Avalanche)
+            local coinName = coin and lookupCoinName(coin) or coin
+
             table.insert(securities, {
                 name = coin,
                 market = "Bitget Spot",
@@ -420,7 +423,11 @@ function fetchSpotBalances()
                 originalCurrencyAmount = amountUSD,
                 currencyOfOriginalAmount = "USD",
                 exchangeRate = getFxRateToBase("USD"),
-                amount = amountEUR
+                amount = amountEUR,
+                userdata = {
+                    -- Custom fields for additional information
+                    { key="Coin", value=coinName },
+                }
             })
         end
         ::continue::
