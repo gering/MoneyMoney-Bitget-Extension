@@ -395,11 +395,23 @@ function fetchSpotBalances()
         if total > 0 then
             -- Get current price in USD
             local priceUSD = 0
+            local priceEUR = 0
+            local baseCurrency = "USD"
+            local fiat = false
 
-            -- Skip price lookup for USDT itself
+            -- Handle different coin types for price lookup
             if coin == "USDT" then
                 priceUSD = 1
+            elseif coin == "USD" then
+                -- USD is a fiat currency
+                priceUSD = 1
+                fiat = true
+            elseif coin == "EUR" then
+                -- EUR is a fiat currency
+                priceEUR = 1
+                fiat = true
             else
+                -- For other cryptocurrencies, fetch the current price
                 local priceResponse = makeRequest("GET", "/api/spot/v1/market/ticker", {symbol = coin .. "USDT_SPBL"}, nil)
 
                 if priceResponse and priceResponse.code == "00000" and priceResponse.data then
@@ -408,8 +420,17 @@ function fetchSpotBalances()
             end
 
             -- Convert amount to EUR
-            local amountUSD = total * priceUSD
-            local amountEUR = convertToEUR(amountUSD, "USD")
+            local amountEUR = 0
+            local amountUSD = 0
+            if priceUSD > 0 then
+                amountUSD = total * priceUSD
+                amountEUR = convertToEUR(amountUSD, "USD")
+            elseif priceEUR > 0 then
+                -- If we have a EUR price, use it directly
+                amountEUR = total * priceEUR
+            else
+                MM.printStatus("Kein Preis für " .. coin)
+            end
 
             -- Coin name (e.g., AVAX -> Avalanche)
             local coinName = coin and lookupCoinName(coin) or coin
@@ -418,17 +439,20 @@ function fetchSpotBalances()
                 name = coin,
                 market = "Bitget Spot",
                 quantity = total,
+                currencyOfQuantity = fiat and coin:sub(1, 3) or nil, -- Use first 3 letters as currency code
                 price = priceUSD,
-                currencyOfPrice = "USD",
-                originalCurrencyAmount = amountUSD,
-                currencyOfOriginalAmount = "USD",
-                exchangeRate = getFxRateToBase("USD"),
+                currencyOfPrice = baseCurrency,
+                originalCurrencyAmount = amountUSD or amountEUR,
+                currencyOfOriginalAmount = baseCurrency,
+                exchangeRate = getFxRateToBase(baseCurrency),
                 amount = amountEUR,
-                userdata = {
-                    -- Custom fields for additional information
-                    { key="Coin", value=coinName },
-                }
+                userdata = {}
             })
+
+            -- Custom fields for additional information
+            if not fiat then
+                table.insert(securities[#securities].userdata, { key = "Coin", value = coinName })
+            end
         end
         ::continue::
     end
