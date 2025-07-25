@@ -25,7 +25,7 @@
 -- SOFTWARE.
 
 WebBanking{
-    version = 1.0,
+    version = 1.1,
     country = "de",
     description = string.format(MM.localizeText("Fetch balances and positions from %s"), "Bitget"),
     services = {"Bitget"},
