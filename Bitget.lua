@@ -68,10 +68,6 @@ end
 
 -- Currency conversion functions
 function fetchFxRate(base, quote)
-    if quote == "EUR" then
-        return 1 / fetchFxRate(quote, base)
-    end
-
     if base == "EUR" then
         local content = Connection():request("GET", "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml")
         for cube in content:parseTags("Cube") do
@@ -84,8 +80,10 @@ function fetchFxRate(base, quote)
     end
 
     MM.printStatus("Wechselkurs nicht verfügbar für " .. base .. "/" .. quote)
-    -- Cache failed lookups to avoid repeated API calls
-    setFxRate(base, quote, nil)
+    -- Only cache failed ECB lookups (EUR base), otherwise we may poison reverse-pair logic
+    if base == "EUR" then
+        setFxRate(base, quote, nil)
+    end
     return nil
 end
 
@@ -125,11 +123,11 @@ end
 function convertToEUR(amount, currency)
     if currency == "EUR" then
         return amount
-    elseif currency == "USDT" then
-        -- Treat USDT as USD for conversion
+    elseif currency == "USDT" or currency == "USDC" then
+        -- Treat stablecoins as USD for conversion
         local rate = getFxRate("EUR", "USD")
         if not rate then
-            MM.printStatus("Fallback: USDT wird als 1:1 USD behandelt")
+            MM.printStatus("Fallback: Stablecoin wird als 1:1 USD behandelt")
             rate = 1
         end
         return amount / rate
@@ -144,8 +142,8 @@ function convertToEUR(amount, currency)
 end
 
 function getFxRateToBase(currency)
-    -- Special handling for USDT - treat as USD
-    if currency == "USDT" then
+    -- Special handling for stablecoins - treat as USD
+    if currency == "USDT" or currency == "USDC" then
         return getFxRate("EUR", "USD")
     end
     return getFxRate("EUR", currency)
@@ -231,10 +229,10 @@ function lookupCoinName(symbol)
 end
 
 function fetchCurrentPrice(symbol)
-    local response = makeRequest("GET", "/api/mix/v1/market/ticker", {symbol = symbol}, nil)
-
-    if response and response.code == "00000" and response.data then
-        return tonumber(response.data.last) or tonumber(response.data.close) or 0
+    -- V2 requires productType + symbol; response.data is an array with lastPr
+    local response = makeRequest("GET", "/api/v2/mix/market/ticker", { productType = "USDT-FUTURES", symbol = symbol }, nil)
+    if response and response.code == "00000" and response.data and response.data[1] then
+        return tonumber(response.data[1].lastPr) or 0
     end
 
     MM.printStatus("Fallback: Kein aktueller Preis für " .. symbol)
@@ -254,19 +252,41 @@ function createSignature(timestamp, method, requestPath, queryString, body)
     return MM.base64(signature)
 end
 
+local function urlEncode(str)
+    str = tostring(str or "")
+    return (str:gsub("([^%w%-_%.~])", function(c)
+        return string.format("%%%02X", string.byte(c))
+    end))
+end
+
+local function buildQueryString(queryParams)
+    if not queryParams then return "" end
+    local keys = {}
+    for k, _ in pairs(queryParams) do table.insert(keys, k) end
+    table.sort(keys)
+    local params = {}
+    for _, k in ipairs(keys) do
+        table.insert(params, urlEncode(k) .. "=" .. urlEncode(queryParams[k]))
+    end
+    return table.concat(params, "&")
+end
+
+local function makePublicRequest(method, path, queryParams)
+    local queryString = buildQueryString(queryParams)
+    local url = baseUrl .. path .. (queryString ~= "" and ("?" .. queryString) or "")
+    local content = connection:request(method, url)
+    if content then
+        return JSON(content):dictionary()
+    end
+    return nil
+end
+
+
 function makeRequest(method, path, queryParams, body)
     local timestamp = tostring(os.time() * 1000)
-    local queryString = ""
-
-    if queryParams then
-        local params = {}
-        for k, v in pairs(queryParams) do
-            table.insert(params, k .. "=" .. v)
-        end
-        queryString = table.concat(params, "&")
-        if queryString ~= "" then
-            path = path .. "?" .. queryString
-        end
+    local queryString = buildQueryString(queryParams)
+    if queryString ~= "" then
+        path = path .. "?" .. queryString
     end
 
     local signature = createSignature(timestamp, method, path:match("^([^?]+)"), queryString, body or "")
@@ -276,6 +296,7 @@ function makeRequest(method, path, queryParams, body)
         ["ACCESS-SIGN"] = signature,
         ["ACCESS-TIMESTAMP"] = timestamp,
         ["ACCESS-PASSPHRASE"] = passphrase,
+        ["locale"] = "en-US",
         ["Content-Type"] = "application/json"
     }
 
@@ -318,11 +339,17 @@ function InitializeSession(protocol, bankCode, username, username2, password, us
 
     connection = Connection()
 
-    -- Test connection with a simple API call
-    local response = makeRequest("GET", "/api/spot/v1/public/time", nil, nil)
+    -- V2: public time (no signing required)
+    local timeResp = makePublicRequest("GET", "/api/v2/public/time", nil)
+    if not timeResp or timeResp.code ~= "00000" then
+        MM.printStatus("Fehler: Verbindung fehlgeschlagen (public time)")
+        return LoginFailed
+    end
 
-    if not response or response.code ~= "00000" then
-        MM.printStatus("Fehler: Verbindung fehlgeschlagen")
+    -- V2: validate API credentials via a signed endpoint
+    local authResp = makeRequest("GET", "/api/v2/spot/account/assets", { assetType = "hold_only" }, nil)
+    if not authResp or authResp.code ~= "00000" then
+        MM.printStatus("Fehler: API Credentials ungültig oder keine Berechtigung (spot assets)")
         return LoginFailed
     end
 
@@ -372,7 +399,8 @@ end
 function fetchSpotBalances()
     local securities = {}
 
-    local response = makeRequest("GET", "/api/spot/v1/account/assets", nil, nil)
+    -- V2 endpoint + response fields changed (coin, available, frozen, locked)
+    local response = makeRequest("GET", "/api/v2/spot/account/assets", { assetType = "hold_only" }, nil)
 
     if not response or response.code ~= "00000" then
         MM.printStatus("Fehler beim Abrufen der Spot-Guthaben")
@@ -380,10 +408,9 @@ function fetchSpotBalances()
     end
 
     for _, asset in ipairs(response.data or {}) do
-        local coin = asset.coinName or asset.coinDisplayName
-        if not coin then
-            -- Skip asset if no coin name available
-            MM.printStatus("Überspringe Asset ohne Coin-Name")
+        local coin = asset.coin and tostring(asset.coin):upper() or nil
+        if not coin or coin == "" then
+            MM.printStatus("Überspringe Asset ohne Coin")
             goto continue
         end
 
@@ -406,16 +433,18 @@ function fetchSpotBalances()
                 -- USD is a fiat currency
                 priceUSD = 1
                 fiat = true
+                baseCurrency = "USD"
             elseif coin == "EUR" then
                 -- EUR is a fiat currency
                 priceEUR = 1
                 fiat = true
+                baseCurrency = "EUR"
             else
                 -- For other cryptocurrencies, fetch the current price
-                local priceResponse = makeRequest("GET", "/api/spot/v1/market/ticker", {symbol = coin .. "USDT_SPBL"}, nil)
-
-                if priceResponse and priceResponse.code == "00000" and priceResponse.data then
-                    priceUSD = tonumber(priceResponse.data.close) or 0
+                -- V2 spot ticker: /api/v2/spot/market/tickers?symbol=BTCUSDT ; data is array; lastPr is last price
+                local priceResponse = makePublicRequest("GET", "/api/v2/spot/market/tickers", { symbol = coin .. "USDT" })
+                if priceResponse and priceResponse.code == "00000" and priceResponse.data and priceResponse.data[1] then
+                    priceUSD = tonumber(priceResponse.data[1].lastPr) or 0
                 end
             end
 
@@ -465,49 +494,48 @@ function fetchFuturesPositions()
     local securities = {}
 
     -- First, fetch futures account balance (available funds)
-    local balanceResponse = makeRequest("GET", "/api/mix/v1/account/accounts", {productType = "umcbl"}, nil)
-    if balanceResponse and balanceResponse.code == "00000" and balanceResponse.data then
-        for _, account in ipairs(balanceResponse.data or {}) do
-            -- Try different fields for available balance
-            local available = tonumber(account.available) or tonumber(account.equity) or tonumber(account.crossMaxAvailable) or 0
-            local marginCoin = account.marginCoin or "USDT"
-
-            if available > 0 then
-                local availableEUR = convertToEUR(available, marginCoin == "USDT" and "USD" or marginCoin)
-
-                table.insert(securities, {
-                    name = marginCoin,
-                    market = "Bitget Futures",
-                    quantity = available,
-                    exchangeRate = getFxRateToBase(marginCoin == "USDT" and "USD" or marginCoin),
-                    amount = availableEUR
-                })
+    local productTypes = { "USDT-FUTURES", "USDC-FUTURES", "COIN-FUTURES" }
+    for _, pt in ipairs(productTypes) do
+        local balanceResponse = makeRequest("GET", "/api/v2/mix/account/accounts", { productType = pt }, nil)
+        if balanceResponse and balanceResponse.code == "00000" and balanceResponse.data then
+            for _, account in ipairs(balanceResponse.data or {}) do
+                local available = tonumber(account.available) or tonumber(account.accountEquity) or 0
+                local marginCoin = account.marginCoin or "USDT"
+                local fxCoin = (marginCoin == "USDT" or marginCoin == "USDC") and "USD" or marginCoin
+                if available and available > 0 then
+                    local availableEUR = convertToEUR(available, fxCoin)
+                    table.insert(securities, {
+                        name = marginCoin,
+                        market = "Bitget Futures",
+                        quantity = available,
+                        exchangeRate = getFxRateToBase(fxCoin),
+                        amount = availableEUR
+                    })
+                end
             end
         end
     end
 
-    -- Fetch all futures positions
-    local productTypes = {"umcbl", "dmcbl", "cmcbl"} -- USDT, Universal, USDC perpetuals
-
+    -- Fetch all futures positions (V2)
     for _, productType in ipairs(productTypes) do
-        local response = makeRequest("GET", "/api/mix/v1/position/allPosition-v2", {productType = productType}, nil)
+        local response = makeRequest("GET", "/api/v2/mix/position/all-position", { productType = productType }, nil)
 
         if response and response.code == "00000" and response.data then
             for _, position in ipairs(response.data or {}) do
                 if tonumber(position.total) and tonumber(position.total) > 0 then
-                    local symbol = position.symbol:gsub("_.*", "") -- Remove suffix like _UMCBL
+                    local symbol = tostring(position.symbol or "")
                     local cryptoSymbol = symbol:match("([%w]+)USDT") or symbol:match("([%w]+)USDC") or symbol:match("([%w]+)BTC") or symbol:match("([%w]+)ETH")
                     local holdSide = position.holdSide
                     local leverage = tonumber(position.leverage) or 1
 
                     local unrealizedPnl = tonumber(position.unrealizedPL) or 0
-                    local marketPrice = tonumber(position.marketPrice) or 0
-                    local avgPrice = tonumber(position.averageOpenPrice) or 0
+                    local marketPrice = tonumber(position.markPrice) or 0
+                    local avgPrice = tonumber(position.openPriceAvg) or 0
 
                     -- Check for margin mode (isolated vs cross)
                     local marginMode = position.marginMode or "unknown"
                     local total = tonumber(position.total) or 0
-                    local margin = tonumber(position.margin) or 0
+                    local margin = tonumber(position.marginSize) or 0
 
                     MM.printStatus("Futures-Position: " .. symbol .. " (" .. holdSide .. ")" .. " - Leverage: " .. leverage .. "x " .. marginMode .. " - Margin: " .. margin .. " - Price: " .. marketPrice .. " - Average Price: " .. avgPrice .. " - P&L: " .. unrealizedPnl .. " - Total: " .. total)
 
@@ -538,10 +566,10 @@ function fetchFuturesPositions()
                     end
 
                     -- For correct portfolio value: use margin + unrealized P&L
-                    local marginUSD = tonumber(position.margin) or 0
+                    local marginUSD = tonumber(position.marginSize) or 0
                     local marginCurrency = position.marginCoin or quoteCurrency
-                    -- Convert USDT to USD for MoneyMoney compatibility
-                    if marginCurrency == "USDT" then
+                    -- Convert USDT / USDC to USD for MoneyMoney compatibility
+                    if marginCurrency == "USDT" or marginCurrency == "USDC" then
                         marginCurrency = "USD"
                     end
 
@@ -599,4 +627,3 @@ function EndSession()
     -- Nothing to do
 end
 
--- SIGNATURE: MCwCFAvxxJEQqJ7YyXm49LDgsQ47T8C9AhRnIid+ufF7YqV3IF55wkhXbuY7nA==
