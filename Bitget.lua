@@ -25,7 +25,7 @@
 -- SOFTWARE.
 
 WebBanking{
-    version = 1.1,
+    version = 2.0,
     country = "de",
     description = string.format(MM.localizeText("Fetch balances and positions from %s"), "Bitget"),
     services = {"Bitget"},
@@ -231,10 +231,10 @@ function lookupCoinName(symbol)
 end
 
 function fetchCurrentPrice(symbol)
-    local response = makeRequest("GET", "/api/mix/v1/market/ticker", {symbol = symbol}, nil)
+    local response = makeRequest("GET", "/api/v2/mix/market/ticker", {symbol = symbol}, nil)
 
-    if response and response.code == "00000" and response.data then
-        return tonumber(response.data.last) or tonumber(response.data.close) or 0
+    if response and response.code == "00000" and response.data and response.data[1] then
+        return tonumber(response.data[1].lastPr) or 0
     end
 
     MM.printStatus("Fallback: Kein aktueller Preis für " .. symbol)
@@ -319,7 +319,7 @@ function InitializeSession(protocol, bankCode, username, username2, password, us
     connection = Connection()
 
     -- Test connection with a simple API call
-    local response = makeRequest("GET", "/api/spot/v1/public/time", nil, nil)
+    local response = makeRequest("GET", "/api/v2/public/time", nil, nil)
 
     if not response or response.code ~= "00000" then
         MM.printStatus("Fehler: Verbindung fehlgeschlagen")
@@ -372,7 +372,7 @@ end
 function fetchSpotBalances()
     local securities = {}
 
-    local response = makeRequest("GET", "/api/spot/v1/account/assets", nil, nil)
+    local response = makeRequest("GET", "/api/v2/spot/account/assets", nil, nil)
 
     if not response or response.code ~= "00000" then
         MM.printStatus("Fehler beim Abrufen der Spot-Guthaben")
@@ -380,7 +380,7 @@ function fetchSpotBalances()
     end
 
     for _, asset in ipairs(response.data or {}) do
-        local coin = asset.coinName or asset.coinDisplayName
+        local coin = asset.coin or asset.coinName or asset.coinDisplayName
         if not coin then
             -- Skip asset if no coin name available
             MM.printStatus("Überspringe Asset ohne Coin-Name")
@@ -412,10 +412,10 @@ function fetchSpotBalances()
                 fiat = true
             else
                 -- For other cryptocurrencies, fetch the current price
-                local priceResponse = makeRequest("GET", "/api/spot/v1/market/ticker", {symbol = coin .. "USDT_SPBL"}, nil)
+                local priceResponse = makeRequest("GET", "/api/v2/spot/market/tickers", {symbol = coin .. "USDT"}, nil)
 
-                if priceResponse and priceResponse.code == "00000" and priceResponse.data then
-                    priceUSD = tonumber(priceResponse.data.close) or 0
+                if priceResponse and priceResponse.code == "00000" and priceResponse.data and priceResponse.data[1] then
+                    priceUSD = tonumber(priceResponse.data[1].lastPr) or 0
                 end
             end
 
@@ -465,7 +465,7 @@ function fetchFuturesPositions()
     local securities = {}
 
     -- First, fetch futures account balance (available funds)
-    local balanceResponse = makeRequest("GET", "/api/mix/v1/account/accounts", {productType = "umcbl"}, nil)
+    local balanceResponse = makeRequest("GET", "/api/v2/mix/account/accounts", {productType = "USDT-FUTURES"}, nil)
     if balanceResponse and balanceResponse.code == "00000" and balanceResponse.data then
         for _, account in ipairs(balanceResponse.data or {}) do
             -- Try different fields for available balance
@@ -487,10 +487,10 @@ function fetchFuturesPositions()
     end
 
     -- Fetch all futures positions
-    local productTypes = {"umcbl", "dmcbl", "cmcbl"} -- USDT, Universal, USDC perpetuals
+    local productTypes = {"USDT-FUTURES", "COIN-FUTURES", "USDC-FUTURES"}
 
     for _, productType in ipairs(productTypes) do
-        local response = makeRequest("GET", "/api/mix/v1/position/allPosition-v2", {productType = productType}, nil)
+        local response = makeRequest("GET", "/api/v2/mix/position/all-position", {productType = productType}, nil)
 
         if response and response.code == "00000" and response.data then
             for _, position in ipairs(response.data or {}) do
@@ -598,5 +598,3 @@ end
 function EndSession()
     -- Nothing to do
 end
-
--- SIGNATURE: MCwCFAvxxJEQqJ7YyXm49LDgsQ47T8C9AhRnIid+ufF7YqV3IF55wkhXbuY7nA==

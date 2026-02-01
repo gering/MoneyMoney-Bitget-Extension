@@ -1,4 +1,4 @@
-# Bitget API Specification
+# Bitget API V2 Specification
 
 ## Base URLs
 - Primary: https://api.bitget.com
@@ -23,61 +23,76 @@ message = timestamp + method + request_path + query_string + body
 Where:
 - `timestamp`: Same as ACCESS-TIMESTAMP header
 - `method`: HTTP method in uppercase (GET, POST, etc.)
-- `request_path`: Path without domain (e.g., `/api/spot/v1/account/assets`)
+- `request_path`: Path without domain (e.g., `/api/v2/spot/account/assets`)
 - `query_string`: Query parameters (without ?)
 - `body`: Request body (empty string for GET requests)
 
 ## Key Endpoints
 
+### Public
+
+#### Server Time
+```
+GET /api/v2/public/time
+```
+
+Response:
+- `serverTime`: Current server timestamp
+
 ### Spot Trading
 
 #### Account Balance
 ```
-GET /api/spot/v1/account/assets
+GET /api/v2/spot/account/assets
 ```
 
 Optional Parameters:
 - `coin`: Filter by specific coin (e.g., "BTC")
 
 Response includes:
+- `coin`: Coin name
 - `available`: Available balance
 - `frozen`: Frozen balance
 - `locked`: Locked balance
 
-#### Account Balance (Lite)
+#### Market Tickers
 ```
-GET /api/spot/v1/account/assets-lite
+GET /api/v2/spot/market/tickers
 ```
 
-Similar to assets endpoint but defaults to showing only non-zero balances.
+Optional Parameters:
+- `symbol`: Trading pair (e.g., "BTCUSDT")
+
+Response includes:
+- `symbol`: Trading pair
+- `lastPr`: Last price
+- `high24h`: 24h high
+- `low24h`: 24h low
+- `change24h`: 24h change percentage
 
 ### Futures Trading (Mix)
 
 #### Account Information
 ```
-GET /api/mix/v1/account/account
-GET /api/mix/v1/account/accounts
+GET /api/v2/mix/account/accounts
 ```
 
 Parameters:
-- `symbol`: Trading pair (e.g., "BTCUSDT_UMCBL")
-- `marginCoin`: Margin coin (e.g., "USDT")
+- `productType`: Product type (USDT-FUTURES, COIN-FUTURES, USDC-FUTURES)
 
 #### Open Positions
 ```
-GET /api/mix/v1/position/allPosition
-GET /api/mix/v1/position/allPosition-v2
+GET /api/v2/mix/position/all-position
 ```
 
 Parameters:
-- `productType`: Product type (umcbl, dmcbl, cmcbl, sumcbl)
+- `productType`: Product type (USDT-FUTURES, COIN-FUTURES, USDC-FUTURES)
 - `marginCoin`: Optional filter
 
 Response includes:
 - `symbol`: Trading pair
 - `marginCoin`: Margin currency
 - `holdSide`: Position side (long/short)
-- `openDelegateCount`: Number of open orders
 - `margin`: Position margin
 - `available`: Available quantity
 - `locked`: Locked quantity
@@ -85,17 +100,27 @@ Response includes:
 - `leverage`: Leverage ratio
 - `achievedProfits`: Realized PnL
 - `unrealizedPL`: Unrealized PnL
-- `unrealizedPLR`: Unrealized PnL ratio
 - `liquidationPrice`: Liquidation price
-- `keepMarginRate`: Maintenance margin rate
 - `markPrice`: Mark price
+- `marketPrice`: Market price
 - `averageOpenPrice`: Average entry price
 
+#### Market Ticker
+```
+GET /api/v2/mix/market/ticker
+```
+
+Parameters:
+- `symbol`: Trading pair
+- `productType`: Product type
+
+Response includes:
+- `lastPr`: Last price
+
 #### Product Types
-- `umcbl`: USDT perpetual
-- `dmcbl`: Universal margin
-- `cmcbl`: USDC perpetual
-- `sumcbl`: USDT perpetual demo
+- `USDT-FUTURES`: USDT perpetual
+- `COIN-FUTURES`: Coin margined perpetual
+- `USDC-FUTURES`: USDC perpetual
 
 ## Rate Limits
 - Most endpoints: 10-20 requests/second
@@ -104,12 +129,13 @@ Response includes:
 
 ## Response Format
 Standard JSON response with:
-- `code`: Error code (0 for success)
+- `code`: Error code ("00000" for success)
 - `msg`: Error message
-- `data`: Response data
+- `requestTime`: Request timestamp
+- `data`: Response data (often an array in V2)
 
 ## Error Codes
-- 0: Success
+- "00000": Success
 - 429: Rate limit exceeded
 - Various other codes for authentication failures, invalid parameters, etc.
 
