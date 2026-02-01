@@ -3,3 +3,5 @@
 *.bak
 api-keys.txt
 test-data/
+.claude/settings.local.json
+CLAUDE.md
